@@ -1,0 +1,131 @@
+#! /bin/bash
+
+(
+echo g
+echo n
+echo p
+echo 1
+echo
+echo +1M
+echo n
+echo p
+echo 2
+echo
+echo
+echo t
+echo 1
+echo 4
+echo t
+echo 2
+echo 29
+echo w
+) | fdisk /dev/sda
+
+echo g | fdisk /dev/sdb
+
+sgdisk --backup=ptable /dev/sda
+sgdisk --load-backup=ptable /dev/sdb
+sgdisk -G /dev/sdb
+
+echo y | mdadm --create /dev/md0 --level=1 --raid-devices=2 --spare=0 /dev/sda2 /dev/sdb2
+
+echo y | mkfs.ext4 /dev/md0
+
+mount /dev/md0 /mnt
+
+pacstrap /mnt base linux base-devel
+
+touch /mnt/config.sh
+chmod +x /mnt/config.sh
+
+echo "Set a hostname: "
+read hostname
+
+echo "Type the destination of the server (America/Europe/Asia): "
+read country
+echo "Type the city (with "_" instead of space): "
+read city
+
+## Arch linux - config ===============================
+
+cat << EOT >> /mnt/config.sh
+(
+echo festheslo21
+echo festheslo21
+) | passwd
+
+echo y | pacman -S vim
+
+sed -i '/^#.* en_US /s/^#//' /etc/locale.gen
+sed -i '/^#.* en_US.UTF-8 /s/^#//' /etc/locale.gen
+locale-gen
+
+ln -s /usr/share/zoneinfo/$country/$city /etc/localtime
+
+echo "$hostname" > /etc/hostname
+
+echo y | pacman -S grub-bios mdadm
+grub-install /dev/sda
+grub-install /dev/sdb
+
+mdadm --detail --scan >> /etc/mdadm.conf
+
+sed -i 's/modconf block/modconf block mdadm_udev/g' /etc/mkinitcpio.conf
+
+mkinitcpio -p linux
+
+grub-mkconfig -o /boot/grub/grub.cfg
+
+(
+echo 1
+echo y
+) | pacman -S netctl
+systemctl enable netctl
+
+echo y | pacman -S openssh
+systemctl enable sshd
+
+exit
+EOT
+## ===================================================
+
+arch-chroot /mnt ./config.sh
+
+ip a
+echo "Type the name of the interface: "
+read interface
+touch /mnt/etc/netctl/$interface
+(
+echo Description=\'A basic static ethernet connection\'
+echo Interface=$interface
+echo Connection=ethernet
+echo IP=static
+) >> /mnt/etc/netctl/$interface
+echo "Type one IP address with netmask (/xx): "
+read address
+(
+echo Address=\'$address\'
+) >> /mnt/etc/netctl/$interface
+echo "Type a gateway: "
+read gateway
+(
+echo Gateway=\'$gateway\'
+echo DNS=\(\'8.8.8.8\' \'8.8.4.4\'\)
+) >> /mnt/etc/netctl/$interface
+
+echo "netctl enable $interface" > /mnt/config.sh
+arch-chroot /mnt ./config.sh
+
+sed -i 's/#Port 22/Port 22/g' /mnt/etc/ssh/sshd_conf
+sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/g' /mnt/etc/ssh/sshd_conf
+
+genfstab /mnt >> /mnt/etc/fstab
+
+rm /mnt/config.sh
+
+umount /mnt
+
+echo "*****************************************************************************"
+echo "root: festheslo21"
+echo "Instalace je kompletni! Zbyva udelat reboot."
+echo "*****************************************************************************"
